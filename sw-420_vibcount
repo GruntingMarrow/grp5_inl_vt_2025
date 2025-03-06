@@ -1,0 +1,83 @@
+import RPi.GPIO as GPIO
+import time
+from datetime import datetime, timedelta
+import os
+
+# Definiera GPIO-pinne för SW-420 Vibration Sensor
+VIBRATION_SENSOR_PIN = 26  # GPIO26
+LOG_FILE = "/home/ulf/VSM_log.txt"
+TIME_LOG_FILE = "/home/ulf/time_log.txt"
+
+# Stäng av GPIO-varningar
+GPIO.setwarnings(False)
+
+# Initialisera GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(VIBRATION_SENSOR_PIN, GPIO.IN)
+
+# Funktion för att läsa senaste logg från time_log.txt
+def read_last_log():
+    if os.path.exists(TIME_LOG_FILE):
+        try:
+            with open(TIME_LOG_FILE, "r") as file:
+                lines = file.readlines()
+                if lines:
+                    return lines[-1].strip()
+                else:
+                    return "No logs found."
+        except FileNotFoundError:
+            return "Log file not found."
+    else:
+        return "Log file does not exist."
+
+# Funktion för att logga antal vibrationer
+def log_vibration_count(vibration_count):
+    last_logged_time = read_last_log()
+    if last_logged_time in ["No logs found.", "Log file does not exist."]:
+        print("Error: Could not read the time_log.txt file.")
+        return
+    
+    event_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with open(LOG_FILE, "a") as file:
+        file.write(f"{event_time} - Vibrationer under 5 sek: {vibration_count}. Last logged time: {last_logged_time}\n")
+    print(f"Event logged: {event_time} - {vibration_count} vibrationer.")
+
+# Funktion för att rensa loggen efter 24 timmar
+def clear_log_if_needed():
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, "r") as file:
+                lines = file.readlines()
+                if lines:
+                    first_log_time_str = lines[0].split(" - ")[0]
+                    first_log_time = datetime.strptime(first_log_time_str, '%Y-%m-%d %H:%M:%S')
+                    current_time = datetime.now()
+                    
+                    if (current_time - first_log_time) > timedelta(hours=24):
+                        with open(LOG_FILE, "w") as file:
+                            file.write("")
+                        print("Log file cleared due to 24-hour expiration.")
+        except Exception as e:
+            print(f"Error while checking log file: {e}")
+
+# Huvudloop för att övervaka vibrationssensorn och räkna vibrationer
+try:
+    print("Vibration Sensor Monitoring Started...")
+    while True:
+        vibration_count = 0  # Nollställ räknaren
+        
+        start_time = time.time()  # Starta 5-sekundersräkning
+        while time.time() - start_time < 5:
+            if GPIO.input(VIBRATION_SENSOR_PIN) == GPIO.HIGH:  # HIGH vid vibration
+                vibration_count += 1
+                time.sleep(0.1)  # Debounce (för att undvika snabba, upprepade registreringar)
+        
+        # Logga endast om vi har haft vibrationer
+        if vibration_count > 0:
+            log_vibration_count(vibration_count)
+
+        clear_log_if_needed()  # Kolla om loggfilen behöver rensas
+
+except KeyboardInterrupt:
+    print("Program interrupted. Exiting...")
+    GPIO.cleanup()
