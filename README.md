@@ -1,6 +1,7 @@
 # grp5_inl_vt_2025
 
 # Detta är ett grupparbete utfört av 5 st studenter på TUC Sweden's utbildning till IoT-Projektör.
+# den specifika kursen för detta projekt var IoT-Plattformar
 
 # presentation av medlemmarna följer från yngst till äldst
 
