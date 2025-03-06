@@ -1,0 +1,81 @@
+import RPi.GPIO as GPIO
+import time
+import paho.mqtt.client as mqtt
+from datetime import datetime, timedelta
+
+# GPIO-nummer för sensorer
+VIBRATION_SENSOR_PIN = 17  # Pin 11
+LINE_TRACKER_PIN = 27       # Pin 13
+
+# GPIO-nummer för DS1302 RTC
+RTC_CLK = 24  # Pin 18
+RTC_DAT = 23  # Pin 16
+RTC_RST = 22  # Pin 15
+
+# MQTT-inställningar
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_TOPIC = "rum1/sensor_data"
+
+# Initiera GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(VIBRATION_SENSOR_PIN, GPIO.IN)
+GPIO.setup(LINE_TRACKER_PIN, GPIO.IN)
+
+# Logginställningar
+LOG_FILE = "sensor_log.txt"
+LOG_RESET_INTERVAL = timedelta(hours=24)
+last_reset_time = datetime.now()
+activity_detected = False
+
+# MQTT Client Setup
+client = mqtt.Client()
+client.connect(MQTT_BROKER, 1883, 60)
+
+def read_rtc_time():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Placeholder för RTC
+
+def log_event(event):
+    global activity_detected
+    activity_detected = True
+    timestamp = read_rtc_time()
+    log_entry = f"{timestamp} - {event}\n"
+    
+    with open(LOG_FILE, "a") as file:
+        file.write(log_entry)
+    
+    print(log_entry.strip())
+    client.publish(MQTT_TOPIC, log_entry)
+
+def reset_log():
+    global last_reset_time, activity_detected
+    if not activity_detected and datetime.now() - last_reset_time > LOG_RESET_INTERVAL:
+        with open(LOG_FILE, "w") as file:
+            file.write(f"{read_rtc_time()} - Logg rensad pga inaktivitet\n")
+        last_reset_time = datetime.now()
+        print("Loggen har rensats.")
+
+def main():
+    global activity_detected
+    try:
+        while True:
+            vibration = GPIO.input(VIBRATION_SENSOR_PIN)
+            line_detected = GPIO.input(LINE_TRACKER_PIN)
+
+            if vibration == GPIO.HIGH:
+                log_event("Vibration registrerad")
+            
+            if line_detected == GPIO.LOW:  # Justera beroende på sensorns logik
+                log_event("Linje upptäckt")
+
+            reset_log()
+            activity_detected = False
+
+            print("Väntar 1 sekund...")  # Ny debugutskrift
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        print("Avslutar...")
+        GPIO.cleanup()
+
+if __name__ == "__main__":
+    main()
