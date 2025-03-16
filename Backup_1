@@ -1,0 +1,431 @@
+Vib_ json.py
+
+import RPi.GPIO as GPIO
+import time
+import json
+from datetime import datetime
+import os
+import math
+
+# Definiera användarnamn som en variabel
+user = "ulf"
+
+# Definiera GPIO-pinnar för SW-420 Vibration Sensor och LED-lampa
+VIBRATION_SENSOR_PIN = 26  # GPIO26
+WARNING_LED_PIN = 19  # GPIO19 för lampan (LED)
+
+# Loggmapp
+LOG_DIR = f"/home/{user}/loggfiler/"
+BACKUP_DIR = f"/home/{user}/backup/"
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# Loggfiler
+VIBRATION_LOG_FILE = os.path.join(LOG_DIR, "vibration_count_log.json")
+FREQUENCY_LOG_FILE = os.path.join(LOG_DIR, "frequency_log.json")
+AMPLITUDE_LOG_FILE = os.path.join(LOG_DIR, "amplitude_log.json")
+VELOCITY_LOG_FILE = os.path.join(LOG_DIR, "velocity_log.json")
+BACKUP_LOG_FILE = os.path.join(BACKUP_DIR, f"VSM_backup_{datetime.now().strftime('%Y-%m-%d')}.txt")
+
+# Stäng av GPIO-varningar
+GPIO.setwarnings(False)
+
+# Initialisera GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(VIBRATION_SENSOR_PIN, GPIO.IN)
+GPIO.setup(WARNING_LED_PIN, GPIO.OUT)  # Sätt GPIO 19 som utgång (LED)
+
+# Sätta tid för mätning
+MEASUREMENT_TIME = 8  # Mättid i sekunder
+VIBRATION_MULTIPLIER = 9600  # Räknare uppräkning (8H)
+MAX_VELOCITY = 1.5  # Gränsvärde för hastighet (m/s)
+
+# Funktion för att säkerställa att loggfilerna finns
+def ensure_log_files_exist():
+    log_files = [
+        VIBRATION_LOG_FILE,
+        FREQUENCY_LOG_FILE,
+        AMPLITUDE_LOG_FILE,
+        VELOCITY_LOG_FILE,
+        BACKUP_LOG_FILE
+    ]
+    
+    # Skapa loggfiler om de inte finns
+    for log_file in log_files:
+        if not os.path.exists(log_file):
+            # Om filen inte finns, skapa den
+            with open(log_file, "w") as file:
+                # För JSON-filer: skriv en tom struktur
+                if log_file.endswith('.json'):
+                    json.dump({}, file)
+                # För backupfilen: skriv en tom rad eller en header
+                else:
+                    file.write("Vibration Log Backup - Created: " + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + "\n")
+
+# Anropa funktionen för att säkerställa att loggfilerna finns innan programmet körs
+ensure_log_files_exist()
+
+# Funktion för att skriva senaste JSON-data (ersätter gammalt värde)
+def write_latest_json(file, data):
+    with open(file, "w") as f:  # "w" skriver över filen med senaste värdet
+        json.dump(data, f)
+
+# Funktion för att logga vibrationer och beräknade värden
+def log_vibration_data(vibration_count, frequency, amplitude, velocity):
+    event_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    data = {
+        "timestamp": event_time,
+        "value": vibration_count
+    }
+    write_latest_json(VIBRATION_LOG_FILE, data)
+
+    data["value"] = round(frequency, 2)
+    write_latest_json(FREQUENCY_LOG_FILE, data)
+
+    data["value"] = round(amplitude, 4)
+    write_latest_json(AMPLITUDE_LOG_FILE, data)
+
+    data["value"] = round(velocity, 2)
+    write_latest_json(VELOCITY_LOG_FILE, data)
+
+    # Spara i backup-loggen (behåller alla värden)
+    with open(BACKUP_LOG_FILE, "a") as backup:
+        backup.write(f"{event_time} - Vibrationer: {vibration_count}, Frekvens: {frequency:.2f} Hz, Amplitud: {amplitude:.4f} m, Hastighet: {velocity:.2f} m/s\n")
+
+    print(f"Event logged: {event_time} - {vibration_count} vibrationer, Frekvens: {frequency:.2f} Hz, Amplitud: {amplitude:.4f} m, Hastighet: {velocity:.2f} m/s")
+
+# Huvudloop för att övervaka vibrationssensorn och räkna vibrationer
+try:
+    print("Vibration Sensor Monitoring Started...")
+    while True:
+        vibration_count = 0  # Nollställ räknaren
+        start_time = time.time()
+
+        while time.time() - start_time < MEASUREMENT_TIME:
+            if GPIO.input(VIBRATION_SENSOR_PIN) == GPIO.HIGH:
+                vibration_count += 1
+                time.sleep(0.1)  # Debounce
+
+        # Beräkna frekvens, amplitud och hastighet
+        frequency = vibration_count / MEASUREMENT_TIME
+        amplitude = 0.005 * frequency  # Anpassad amplitudberäkning
+        velocity = 2 * math.pi * frequency * amplitude
+
+        # Kontrollera om hastigheten överskrider gränsvärdet och styr LED-lampan
+        if velocity > MAX_VELOCITY:
+            print(f"⚠️ Warning: Speed exceeds limit! Velocity = {velocity:.2f} m/s (Limit = {MAX_VELOCITY} m/s)")
+            GPIO.output(WARNING_LED_PIN, GPIO.HIGH)  # Tänd LED
+        else:
+            GPIO.output(WARNING_LED_PIN, GPIO.LOW)  # Släck LED
+
+        # Logga endast om vi har haft vibrationer
+        if vibration_count > 0:
+            multiplied_vibration_count = vibration_count * VIBRATION_MULTIPLIER
+            log_vibration_data(multiplied_vibration_count, frequency, amplitude, velocity)
+
+except KeyboardInterrupt:
+    print("Program interrupted. Exiting...")
+    GPIO.cleanup()
+
+
+
+
+skicka.py
+
+import os
+import time
+import json
+import subprocess
+import requests
+from datetime import datetime
+
+# Definiera användarnamn
+user = "ulf"
+
+# ThingSpeak API-konfiguration
+THINGSPEAK_API_KEY = "BP48R0EULYT3QVLU"  # Ersätt med din ThingSpeak API-nyckel
+THINGSPEAK_URL = "https://api.thingspeak.com/update.json"
+
+# Loggfiler
+LOG_DIRECTORY = f"/home/{user}/loggfiler/"
+
+# Funktion för att läsa JSON-filer rad för rad och hämta värdena
+def read_json_file(file_path):
+    try:
+        values = []
+        with open(file_path, "r") as file:
+            content = file.read().strip()
+            if content:  # Kolla om filen är tom
+                data = json.loads(content)
+                values.append(data)
+        return values
+    except json.JSONDecodeError as e:
+        print(f"JSON Error i filen {file_path}: {e}")
+        return []  # Returnera en tom lista istället för None
+    except Exception as e:
+        print(f"Fel vid läsning av filen {file_path}: {e}")
+        return []  # Returnera en tom lista istället för None
+
+# Funktion för att invertera värdet i ltsm_log.json
+def invert_ltsm_value():
+    ltsm_file_path = f"/home/{user}/loggfiler/ltsm_log.json"
+    try:
+        # Läs filen och hämta data
+        with open(ltsm_file_path, 'r') as file:
+            data = json.load(file)
+
+        # Se till att vi har en lista och att den inte är tom
+        if isinstance(data, list) and data:
+            # Hämta den senaste loggen (eller valfri logg)
+            last_entry = data[-1]  # Hämtar den senaste loggen
+
+            # Invertera statusvärdet (1 blir 0, 0 blir 1)
+            if last_entry.get("status") == 1:
+                last_entry["status"] = 0
+            elif last_entry.get("status") == 0:
+                last_entry["status"] = 1
+
+            # Skriv tillbaka den inverterade datan till filen
+            with open(ltsm_file_path, 'w') as file:
+                json.dump(data, file, indent=4)
+
+            print(f"Inverterade värdet i ltsm_log.json. Ny status: {last_entry['status']}")
+        else:
+            print("Fel: JSON-filen innehåller inte en lista eller är tom.")
+    except Exception as e:
+        print(f"Fel vid invertering av värdet: {e}")
+
+# Funktion för att skicka loggfiler till ThingSpeak
+def send_log_to_thingspeak():
+    # Läs data från JSON-loggfiler
+    vibration_count_data = read_json_file(f"/home/{user}/loggfiler/vibration_count_log.json")
+    frequency_data = read_json_file(f"/home/{user}/loggfiler/frequency_log.json")
+    amplitude_data = read_json_file(f"/home/{user}/loggfiler/amplitude_log.json")
+    velocity_data = read_json_file(f"/home/{user}/loggfiler/velocity_log.json")
+    ltsm_data = read_json_file(f"/home/{user}/loggfiler/ltsm_log.json")  
+    
+    if vibration_count_data and frequency_data and amplitude_data and velocity_data and ltsm_data:
+        # Här mappar vi loggdata till rätt fält
+        for vibration_count, frequency, amplitude, velocity, ltsm in zip(vibration_count_data, frequency_data, amplitude_data, velocity_data, ltsm_data):
+            timestamp = vibration_count["timestamp"]  # Alla har samma tidsstämpel
+
+            # Skicka till ThingSpeak via HTTP POST
+            payload = {
+                "api_key": THINGSPEAK_API_KEY,
+                "field1": vibration_count.get("value", ""),
+                "field2": frequency.get("value", ""),
+                "field3": amplitude.get("value", ""),
+                "field4": velocity.get("value", ""),
+                "field5": ltsm[-1].get("status", "") if ltsm else "",  # Hantera listan här
+                #"field6": timestamp  # Tidsstämpel (fält 6, om du vill ha det)
+            }
+
+            # Skicka till ThingSpeak via HTTP POST
+            response = requests.post(THINGSPEAK_URL, data=payload)
+
+            if response.status_code == 200:
+                print(f"Skickar loggdata till ThingSpeak... Status: {response.status_code}")
+            else:
+                print(f"Fel vid att skicka loggdata till ThingSpeak: {response.status_code} - {response.text}")
+    else:
+        print("Någon eller flera loggfiler saknas eller kan inte läsas.")
+
+
+# Funktion för att starta ltsm.py
+def start_ltsm():
+    # Starta ltsm.py för linetrackern
+    return subprocess.Popen(['python3', 'ltsm.py'])
+
+# Huvudloop för att kontrollera loggfiler och skicka till ThingSpeak
+def main():
+    try:
+        # Starta ltsm.py för linetrackern
+        ltsm_process = start_ltsm()
+
+        while True:
+            # Invertera värdet i ltsm_log.json innan vi skickar
+            invert_ltsm_value()
+
+            # Skicka loggdata till ThingSpeak
+            send_log_to_thingspeak()
+
+            # Vänta 15 sekunder innan nästa skickning
+            time.sleep(15)
+
+    except KeyboardInterrupt:
+        print("Program avslutat.")
+        ltsm_process.terminate()
+        ltsm_process.wait()
+
+# Starta programmet
+if __name__ == "__main__":
+    main()
+
+
+
+
+
+ltsm.py
+
+import RPi.GPIO as GPIO
+import json
+import time
+import os
+from datetime import datetime
+
+# Definiera användarnamn som variabel
+USER = "ulf"
+
+# GPIO-pinnar
+green_pin = 17
+red_pin = 22
+line_pin = 27
+
+# Sätt upp GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(green_pin, GPIO.OUT)
+GPIO.setup(red_pin, GPIO.OUT)
+GPIO.setup(line_pin, GPIO.IN)
+GPIO.setwarnings(False)
+
+# Skapa filnamn baserat på dagens datum
+date_today = datetime.now().strftime("%Y-%m-%d")
+txt_filename = f"/home/{USER}/backup/ltsm_{date_today}.txt"
+json_filename = f"/home/{USER}/loggfiler/ltsm_log.json"
+
+# Kontrollera och skapa mappar om de inte finns
+os.makedirs(f"/home/{USER}/loggfiler", exist_ok=True)
+os.makedirs(f"/home/{USER}/backup", exist_ok=True)
+
+# Funktion för att säkerställa att JSON-filen existerar och är korrekt
+def ensure_json_file():
+    if not os.path.exists(json_filename):
+        with open(json_filename, 'w') as json_file:
+            json.dump([], json_file)  # Skapar en tom lista för loggar
+    else:
+        # Försök att läsa filen och säkerställ att den innehåller giltig JSON
+        try:
+            with open(json_filename, 'r') as json_file:
+                data = json.load(json_file)
+                if not isinstance(data, list):
+                    print(f"Fel: Filen {json_filename} är inte en lista.")
+                    # Återställ till en tom lista
+                    data = []
+        except (json.JSONDecodeError, ValueError):
+            print(f"JSON Error i filen {json_filename}: Filen är tom eller innehåller ogiltig JSON.")
+            # Återställ filen till ett giltigt format om det behövs
+            data = []
+
+        # Skriv tillbaka till filen för att säkerställa att den är i rätt format
+        with open(json_filename, 'w') as json_file:
+            json.dump(data, json_file, indent=4)
+
+
+# Funktion för att logga senaste statusändring i JSON och skriva ut senaste inlägg
+def log_json(status):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = {"timestamp": timestamp, "status": status}
+    
+    # Skriv över JSON-filen med endast den senaste statusen
+    with open(json_filename, 'w') as json_file:
+        json.dump([log_entry], json_file, indent=4)
+    
+    # Skriver ut det senaste inlägget i JSON-filen
+    print("Senaste loggen i JSON:")
+    print(json.dumps(log_entry, indent=4))  # Skriv ut senaste loggen
+
+# Funktion för att skriva loggar till TXT vid varje öppning
+def log_txt(status):
+    if status == 1:  # Logga endast öppningar
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(txt_filename, 'a') as txt_file:
+            txt_file.write(f"{timestamp} - Door opened\n")
+
+# Säkerställ att JSON-filen finns
+ensure_json_file()
+
+# Huvudprogrammet
+try:
+    last_status = None  # Håller koll på föregående status
+    while True:
+        line_detected = GPIO.input(line_pin)
+        current_status = 1 if line_detected == GPIO.HIGH else 0
+
+        if current_status != last_status:  # Endast logga vid förändring
+            if current_status == 1:
+                GPIO.output(red_pin, GPIO.HIGH)
+                GPIO.output(green_pin, GPIO.LOW)
+            else:
+                GPIO.output(red_pin, GPIO.LOW)
+                GPIO.output(green_pin, GPIO.HIGH)
+
+            log_json(current_status)
+            log_txt(current_status)
+            last_status = current_status
+
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("Programmet avbröts.")
+finally:
+    GPIO.cleanup()
+
+
+
+
+
+Start.py
+
+
+import subprocess
+import signal
+import sys
+import time
+
+# Starta de andra skripten som subprocess
+def start_scripts():
+    # Starta vib_json.py
+    vib_process = subprocess.Popen(['python3', 'vib_json.py'])
+
+    # Starta skicka.py
+    skicka_process = subprocess.Popen(['python3', 'skicka.py'])
+
+    # Starta ltsm.py (lägga till den här processen)
+    ltsm_process = subprocess.Popen(['python3', 'ltsm.py'])
+
+    return vib_process, skicka_process, ltsm_process
+
+# Hantera avslutning av processerna
+def stop_scripts(vib_process, skicka_process, ltsm_process):
+    # Skicka signal för att avsluta processerna snyggt
+    print("\nAvslutar skript...")
+    vib_process.terminate()
+    skicka_process.terminate()
+    ltsm_process.terminate()
+
+    # Vänta på att processerna stängs av ordentligt
+    vib_process.wait()
+    skicka_process.wait()
+    ltsm_process.wait()
+    print("Alla processer avslutade.")
+
+# Huvudprogram
+def main():
+    try:
+        # Starta skripten
+        vib_process, skicka_process, ltsm_process = start_scripts()
+
+        # Håll programmet igång tills CTRL+C trycks
+        print("Skripten är igång. Tryck CTRL+C för att avsluta.")
+        while True:
+            time.sleep(1)  # Vänta 1 sekund för att hålla programmet igång
+
+    except KeyboardInterrupt:
+        # Hantera avslutning med CTRL+C
+        stop_scripts(vib_process, skicka_process, ltsm_process)
+        sys.exit(0)  # Avsluta programmet
+
+# Starta huvudfunktionen
+if __name__ == "__main__":
+    main()
+
