@@ -1,0 +1,304 @@
+ltsm10.py
+
+import RPi.GPIO as GPIO
+import json
+import time
+import os
+from datetime import datetime
+
+USER = "ulf"
+
+green_pin = 17
+red_pin = 22
+line_pin = 27
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(green_pin, GPIO.OUT)
+GPIO.setup(red_pin, GPIO.OUT)
+GPIO.setup(line_pin, GPIO.IN)
+GPIO.setwarnings(False)
+
+json_filename = f"/home/{USER}/loggfiler/hail_mary/ltsm_log.json"
+
+def ensure_json_file():
+    if not os.path.exists(json_filename):
+        with open(json_filename, 'w') as json_file:
+            json.dump({}, json_file)
+
+ensure_json_file()
+
+def log_json(status):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(json_filename, 'w') as json_file:
+        json.dump({"timestamp": timestamp, "status": status}, json_file, indent=4)
+
+try:
+    last_status = None
+    while True:
+        current_status = 1 if GPIO.input(line_pin) == GPIO.HIGH else 0
+        if current_status != last_status:
+            GPIO.output(red_pin, current_status)
+            GPIO.output(green_pin, not current_status)
+            log_json(current_status)
+            last_status = current_status
+        time.sleep(1)
+except KeyboardInterrupt:
+    GPIO.cleanup()
+
+
+skicka_10.py
+
+import os
+import time
+import json
+import requests
+from datetime import datetime
+
+user = "ulf"
+
+THINGSPEAK_API_KEY = "BP48R0EULYT3QVLU"
+THINGSPEAK_URL = "https://api.thingspeak.com/update.json"
+
+LOG_DIRECTORY = f"/home/{user}/loggfiler/hail_mary/"
+
+def read_json_file(file_path):
+    try:
+        with open(file_path, "r") as file:
+            return json.load(file)
+    except Exception as e:
+        print(f"Fel vid läsning av {file_path}: {e}")
+        return None
+
+def send_log_to_thingspeak():
+    vibration_data = read_json_file(f"{LOG_DIRECTORY}/vibration_count_log.json")
+    frequency_data = read_json_file(f"{LOG_DIRECTORY}/frequency_log.json")
+    amplitude_data = read_json_file(f"{LOG_DIRECTORY}/amplitude_log.json")
+    velocity_data = read_json_file(f"{LOG_DIRECTORY}/velocity_log.json")
+    ltsm_data = read_json_file(f"{LOG_DIRECTORY}/ltsm_log.json")
+
+    if all([vibration_data, frequency_data, amplitude_data, velocity_data, ltsm_data]):
+        payload = {
+            "api_key": THINGSPEAK_API_KEY,
+            "field1": vibration_data.get("value", ""),
+            "field2": frequency_data.get("value", ""),
+            "field3": amplitude_data.get("value", ""),
+            "field4": velocity_data.get("value", ""),
+            "field5": ltsm_data.get("status", "")
+        }
+
+        response = requests.post(THINGSPEAK_URL, data=payload)
+        print("Skickar loggdata..." if response.status_code == 200 else f"Fel: {response.status_code}")
+
+def main():
+    try:
+        while True:
+            send_log_to_thingspeak()
+            time.sleep(15)
+    except KeyboardInterrupt:
+        print("Program avslutat.")
+
+if __name__ == "__main__":
+    main()
+skicka _20.py
+
+import os
+import time
+import json
+import requests
+from datetime import datetime
+
+user = "ulf"
+
+THINGSPEAK_API_KEY = "BP48R0EULYT3QVLU"
+THINGSPEAK_URL = "https://api.thingspeak.com/update.json"
+
+LOG_DIRECTORY = f"/home/{user}/loggfiler/hail_mary/"
+
+def read_json_file(file_path):
+    try:
+        with open(file_path, "r") as file:
+            return json.load(file)
+    except Exception as e:
+        print(f"Fel vid läsning av {file_path}: {e}")
+        return None
+
+def invert_ltsm_data(ltsm_data):
+    """
+    Funktion för att invertera ltsm_data från 0 till 1 och 1 till 2.
+    """
+    if ltsm_data == 0:
+        return 1
+    elif ltsm_data == 1:
+        return 2
+    else:
+        return ltsm_data
+
+def send_log_to_thingspeak():
+    vibration_data = read_json_file(f"{LOG_DIRECTORY}/vibration_count_log.json")
+    frequency_data = read_json_file(f"{LOG_DIRECTORY}/frequency_log.json")
+    amplitude_data = read_json_file(f"{LOG_DIRECTORY}/amplitude_log.json")
+    velocity_data = read_json_file(f"{LOG_DIRECTORY}/velocity_log.json")
+    ltsm_data = read_json_file(f"{LOG_DIRECTORY}/ltsm_log.json")
+
+    if all([vibration_data, frequency_data, amplitude_data, velocity_data, ltsm_data]):
+        # Invertera ltsm_data här om den finns
+        ltsm_status = invert_ltsm_data(ltsm_data.get("status", ""))
+
+        payload = {
+            "api_key": THINGSPEAK_API_KEY,
+            "field1": vibration_data.get("value", ""),
+            "field2": frequency_data.get("value", ""),
+            "field3": amplitude_data.get("value", ""),
+            "field4": velocity_data.get("value", ""),
+            "field5": ltsm_status  # Skicka det inverterade värdet
+        }
+
+        response = requests.post(THINGSPEAK_URL, data=payload)
+        print("Skickar loggdata..." if response.status_code == 200 else f"Fel: {response.status_code}")
+
+def main():
+    try:
+        while True:
+            send_log_to_thingspeak()
+            time.sleep(15)
+    except KeyboardInterrupt:
+        print("Program avslutat.")
+
+if __name__ == "__main__":
+    main()
+
+
+
+start10.py
+
+import subprocess
+import signal
+import sys
+import time
+
+# Starta de andra skripten som subprocess
+def start_scripts():
+    vib_process = subprocess.Popen(['python3', 'vib_json10.py'])
+    skicka_process = subprocess.Popen(['python3', 'skicka_20.py'])
+    ltsm_process = subprocess.Popen(['python3', 'ltsm10.py'])
+
+    return vib_process, skicka_process, ltsm_process
+
+# Hantera avslutning av processerna
+def stop_scripts(vib_process, skicka_process, ltsm_process):
+    print("\nAvslutar skript...")
+    vib_process.terminate()
+    skicka_process.terminate()
+    ltsm_process.terminate()
+
+    vib_process.wait()
+    skicka_process.wait()
+    ltsm_process.wait()
+    print("Alla processer avslutade.")
+
+def main():
+    try:
+        vib_process, skicka_process, ltsm_process = start_scripts()
+        print("Skripten är igång. Tryck CTRL+C för att avsluta.")
+        while True:
+            time.sleep(1)
+
+    except KeyboardInterrupt:
+        stop_scripts(vib_process, skicka_process, ltsm_process)
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+
+
+
+Vib_json10.py
+
+import RPi.GPIO as GPIO
+import time
+import json
+from datetime import datetime
+import os
+import math
+
+user = "ulf"
+
+VIBRATION_SENSOR_PIN = 26  
+WARNING_LED_PIN = 19  
+
+LOG_DIR = f"/home/{user}/loggfiler/hail_mary/"
+BACKUP_DIR = f"/home/{user}/backup/hail_mary/"
+os.makedirs(LOG_DIR, exist_ok=True)
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+VIBRATION_LOG_FILE = os.path.join(LOG_DIR, "vibration_count_log.json")
+FREQUENCY_LOG_FILE = os.path.join(LOG_DIR, "frequency_log.json")
+AMPLITUDE_LOG_FILE = os.path.join(LOG_DIR, "amplitude_log.json")
+VELOCITY_LOG_FILE = os.path.join(LOG_DIR, "velocity_log.json")
+BACKUP_LOG_FILE = os.path.join(BACKUP_DIR, f"VSM_backup_{datetime.now().strftime('%Y-%m-%d')}.txt")
+
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(VIBRATION_SENSOR_PIN, GPIO.IN)
+GPIO.setup(WARNING_LED_PIN, GPIO.OUT)
+
+MEASUREMENT_TIME = 8  
+VIBRATION_MULTIPLIER = 9600  
+MAX_VELOCITY = 1.5  
+
+def ensure_log_files_exist():
+    log_files = [VIBRATION_LOG_FILE, FREQUENCY_LOG_FILE, AMPLITUDE_LOG_FILE, VELOCITY_LOG_FILE]
+    for log_file in log_files:
+        if not os.path.exists(log_file):
+            with open(log_file, "w") as file:
+                json.dump({}, file)
+
+ensure_log_files_exist()
+
+def write_latest_json(file, data):
+    with open(file, "w") as f:
+        json.dump(data, f)
+
+def log_vibration_data(vibration_count, frequency, amplitude, velocity):
+    event_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    data = {"timestamp": event_time, "value": vibration_count}
+    write_latest_json(VIBRATION_LOG_FILE, data)
+
+    data["value"] = round(frequency, 2)
+    write_latest_json(FREQUENCY_LOG_FILE, data)
+
+    data["value"] = round(amplitude, 4)
+    write_latest_json(AMPLITUDE_LOG_FILE, data)
+
+    data["value"] = round(velocity, 2)
+    write_latest_json(VELOCITY_LOG_FILE, data)
+
+    with open(BACKUP_LOG_FILE, "a") as backup:
+        backup.write(f"{event_time} - {vibration_count} vibrationer, Frekvens: {frequency:.2f} Hz, Amplitud: {amplitude:.4f} m, Hastighet: {velocity:.2f} m/s\n")
+
+try:
+    print("Vibration Sensor Monitoring Started...")
+    while True:
+        vibration_count = 0
+        start_time = time.time()
+
+        while time.time() - start_time < MEASUREMENT_TIME:
+            if GPIO.input(VIBRATION_SENSOR_PIN) == GPIO.HIGH:
+                vibration_count += 1
+                time.sleep(0.1)
+
+        frequency = vibration_count / MEASUREMENT_TIME
+        amplitude = 0.005 * frequency
+        velocity = 2 * math.pi * frequency * amplitude
+
+        GPIO.output(WARNING_LED_PIN, GPIO.HIGH if velocity > MAX_VELOCITY else GPIO.LOW)
+
+        if vibration_count > 0:
+            multiplied_vibration_count = vibration_count * VIBRATION_MULTIPLIER
+            log_vibration_data(multiplied_vibration_count, frequency, amplitude, velocity)
+
+except KeyboardInterrupt:
+    GPIO.cleanup()
+
+
