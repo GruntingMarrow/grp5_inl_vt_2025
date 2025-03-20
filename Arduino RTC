@@ -1,0 +1,80 @@
+#include <Wire.h>
+#include <WiFiS3.h>
+#include <ArduinoHttpClient.h>
+
+// WiFi-inställningar
+const char* ssid = "ssid-name";
+const char* password = "password";
+
+// ThingSpeak-inställningar
+const char* server = "api.thingspeak.com";
+const String apiKey = "DIN_API_KEY_HÄR";
+const int port = 80;
+
+// RTC I2C-adress
+#define RTC_ADDRESS 0x68
+
+WiFiClient wifi;
+HttpClient client = HttpClient(wifi, server, port);
+
+void setup() {
+    Serial.begin(115200);
+    Wire.begin();
+    connectToWiFi();
+}
+
+void loop() {
+    int year, month, day, hour, minute, second;
+    readRTCTime(year, month, day, hour, minute, second);
+    sendToThingSpeak(year, month, day, hour, minute, second);
+    delay(15000); // Skicka var 15:e sekund (ThingSpeak-gräns)
+}
+
+void connectToWiFi() {
+    Serial.print("Ansluter till WiFi...");
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println("\nWiFi ansluten!");
+}
+
+void readRTCTime(int &year, int &month, int &day, int &hour, int &minute, int &second) {
+    Wire.beginTransmission(RTC_ADDRESS);
+    Wire.write(0x00);
+    Wire.endTransmission();
+    Wire.requestFrom(RTC_ADDRESS, 7);
+    
+    second = bcdToDec(Wire.read() & 0x7F);
+    minute = bcdToDec(Wire.read());
+    hour = bcdToDec(Wire.read() & 0x3F);
+    Wire.read(); // Veckodag, ignoreras
+    day = bcdToDec(Wire.read());
+    month = bcdToDec(Wire.read());
+    year = 2000 + bcdToDec(Wire.read());
+    
+    Serial.printf("Läst tid: %04d-%02d-%02d %02d:%02d:%02d\n", year, month, day, hour, minute, second);
+}
+
+int bcdToDec(byte val) {
+    return (val / 16) * 10 + (val % 16);
+}
+
+void sendToThingSpeak(int year, int month, int day, int hour, int minute, int second) {
+    String url = "/update?api_key=" + apiKey +
+                 "&field1=" + String(year) +
+                 "&field2=" + String(month) +
+                 "&field3=" + String(day) +
+                 "&field4=" + String(hour) +
+                 "&field5=" + String(minute) +
+                 "&field6=" + String(second);
+    
+    Serial.println("Skickar till ThingSpeak: " + url);
+    client.get(url);
+    delay(1000);
+    while (client.available()) {
+        Serial.write(client.read());
+    }
+}
+
